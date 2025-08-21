@@ -1,0 +1,52 @@
+# Configuration file for Football Match Predictor
+
+data:
+  raw_data_path: "data/raw/"
+  processed_data_path: "data/processed/"
+  model_path: "data/models/"
+  default_file: "foot_data.csv"
+
+model:
+  random_state: 42
+  test_size: 0.2
+  cv_folds: 5
+  
+  algorithms:
+    - name: "Random Forest"
+      params:
+        n_estimators: 100
+        random_state: 42
+    
+    - name: "Gradient Boosting"
+      params:
+        random_state: 42
+    
+    - name: "Logistic Regression"
+      params:
+        random_state: 42
+        max_iter: 1000
+    
+    - name: "SVM"
+      params:
+        probability: true
+        random_state: 42
+    
+    - name: "Neural Network"
+      params:
+        hidden_layer_sizes: [100, 50]
+        random_state: 42
+        max_iter: 1000
+
+features:
+  categorical_features: ["HTR", "Referee"]
+  statistical_features: ["HS", "AS", "HST", "AST", "HF", "AF", "HC", "AC", "HY", "AY", "HR", "AR", "HTHG", "HTAG"]
+  target_column: "FTR"
+  
+visualization:
+  figure_size: [15, 10]
+  top_features_count: 15
+  
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/football_predictor.log"
