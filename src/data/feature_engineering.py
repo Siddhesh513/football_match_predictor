@@ -1,169 +1,165 @@
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import LabelEncoder, StandardScaler
-from typing import Tuple, Optional
+from typing import Dict, Optional
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-class DataPreprocessor:
-    """Handle data loading and preprocessing operations"""
+class FeatureEngineer:
+    """Handle feature engineering operations"""
 
     def __init__(self):
-        self.label_encoder = LabelEncoder()
-        self.scaler = StandardScaler()
-        self.feature_names = None
-        self.original_data = None
+        self.team_stats = {}
 
-    def load_data(self, file_path: str) -> pd.DataFrame:
+    def calculate_team_strength(self, df: pd.DataFrame) -> Dict[str, float]:
         """
-        Load CSV data
+        Calculate team strength based on historical performance
 
         Args:
-            file_path: Path to CSV file
+            df: DataFrame with match data
 
         Returns:
-            DataFrame with loaded data
+            Dictionary mapping team names to strength scores
         """
-        logger.info(f"Loading data from {file_path}")
+        logger.info("Calculating team strengths")
+        team_stats = {}
 
-        try:
-            df = pd.read_csv(file_path)
-            logger.info(f"Dataset shape: {df.shape}")
-            logger.info(f"Columns: {list(df.columns)}")
-            self.original_data = df.copy()
-            return df
-        except Exception as e:
-            logger.error(f"Error loading data: {e}")
-            raise
+        # Get unique teams
+        teams = set(list(df['HomeTeam'].unique()) +
+                    list(df['AwayTeam'].unique()))
 
-    def handle_missing_values(self, df: pd.DataFrame, strategy: str = 'zero') -> pd.DataFrame:
+        for team in teams:
+            home_games = df[df['HomeTeam'] == team]
+            away_games = df[df['AwayTeam'] == team]
+
+            # Calculate statistics
+            goals_scored = home_games['FTHG'].sum() + away_games['FTAG'].sum()
+            goals_conceded = home_games['FTAG'].sum(
+            ) + away_games['FTHG'].sum()
+
+            home_wins = len(home_games[home_games['FTR'] == 'H'])
+            away_wins = len(away_games[away_games['FTR'] == 'A'])
+            total_games = len(home_games) + len(away_games)
+
+            if total_games > 0:
+                win_rate = (home_wins + away_wins) / total_games
+                goal_diff = goals_scored - goals_conceded
+
+                # Calculate strength score (normalized between 0.1 and 0.9)
+                strength = 0.5 + (win_rate - 0.33) * 0.3 + \
+                    (goal_diff / max(total_games, 1)) * 0.1
+                team_stats[team] = max(0.1, min(0.9, strength))
+            else:
+                team_stats[team] = 0.5  # Default strength
+
+        self.team_stats = team_stats
+        logger.info(f"Calculated strength for {len(team_stats)} teams")
+        return team_stats
+
+    def add_team_strength_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Handle missing values in dataset
+        Add team strength features to DataFrame
 
         Args:
-            df: DataFrame with potentially missing values
-            strategy: Strategy for handling missing values ('zero', 'mean', 'median', 'drop')
+            df: DataFrame with match data
 
         Returns:
-            DataFrame with handled missing values
+            DataFrame with added team strength features
         """
-        logger.info(f"Handling missing values with strategy: {strategy}")
+        logger.info("Adding team strength features")
 
-        if strategy == 'zero':
-            return df.fillna(0)
-        elif strategy == 'mean':
-            numeric_columns = df.select_dtypes(include=[np.number]).columns
-            df[numeric_columns] = df[numeric_columns].fillna(
-                df[numeric_columns].mean())
-            return df
-        elif strategy == 'median':
-            numeric_columns = df.select_dtypes(include=[np.number]).columns
-            df[numeric_columns] = df[numeric_columns].fillna(
-                df[numeric_columns].median())
-            return df
-        elif strategy == 'drop':
-            return df.dropna()
-        else:
-            raise ValueError(f"Unknown strategy: {strategy}")
+        if not self.team_stats:
+            self.calculate_team_strength(df)
 
-    def encode_categorical_features(self, df: pd.DataFrame,
-                                    categorical_features: list) -> pd.DataFrame:
-        """
-        One-hot encode categorical features
-
-        Args:
-            df: DataFrame with categorical features
-            categorical_features: List of categorical feature names
-
-        Returns:
-            DataFrame with encoded features
-        """
-        logger.info(f"Encoding categorical features: {categorical_features}")
-
-        for feature in categorical_features:
-            if feature in df.columns:
-                dummies = pd.get_dummies(
-                    df[feature], prefix=feature, drop_first=True)
-                df = pd.concat([df, dummies], axis=1)
-                df = df.drop(feature, axis=1)
-                logger.info(
-                    f"Encoded {feature} into {len(dummies.columns)} columns")
+        df['HomeTeamStrength'] = df['HomeTeam'].map(self.team_stats)
+        df['AwayTeamStrength'] = df['AwayTeam'].map(self.team_stats)
+        df['StrengthDifference'] = df['HomeTeamStrength'] - df['AwayTeamStrength']
 
         return df
 
-    def encode_target(self, y: pd.Series) -> np.ndarray:
+    def add_shot_accuracy_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Encode target variable
+        Add shot accuracy features
 
         Args:
-            y: Target variable series
+            df: DataFrame with match data
 
         Returns:
-            Encoded target array
+            DataFrame with added shot accuracy features
         """
-        logger.info("Encoding target variable")
-        y_encoded = self.label_encoder.fit_transform(y)
-        logger.info(f"Target classes: {self.label_encoder.classes_}")
-        return y_encoded
+        logger.info("Adding shot accuracy features")
 
-    def decode_target(self, y_encoded: np.ndarray) -> np.ndarray:
+        # Avoid division by zero
+        df['ShotAccuracyHome'] = df['HST'] / (df['HS'] + 1e-6)
+        df['ShotAccuracyAway'] = df['AST'] / (df['AS'] + 1e-6)
+        df['ShotAccuracyDiff'] = df['ShotAccuracyHome'] - df['ShotAccuracyAway']
+
+        return df
+
+    def add_form_features(self, df: pd.DataFrame, n_games: int = 5) -> pd.DataFrame:
         """
-        Decode target variable back to original labels
+        Add recent form features for teams
 
         Args:
-            y_encoded: Encoded target array
+            df: DataFrame with match data (should be sorted by date)
+            n_games: Number of recent games to consider
 
         Returns:
-            Decoded target array
+            DataFrame with added form features
         """
-        return self.label_encoder.inverse_transform(y_encoded)
+        logger.info(f"Adding form features (last {n_games} games)")
 
-    def scale_features(self, X: pd.DataFrame, fit: bool = True) -> np.ndarray:
+        # This would require date information and proper sorting
+        # For now, returning df as is
+        # In production, you would calculate rolling averages of recent performance
+
+        return df
+
+    def create_interaction_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Scale features using StandardScaler
+        Create interaction features between existing features
 
         Args:
-            X: Features DataFrame
-            fit: Whether to fit the scaler (True for training, False for prediction)
+            df: DataFrame with features
 
         Returns:
-            Scaled features array
+            DataFrame with added interaction features
         """
-        logger.info(f"Scaling features (fit={fit})")
+        logger.info("Creating interaction features")
 
-        if fit:
-            return self.scaler.fit_transform(X)
-        else:
-            return self.scaler.transform(X)
+        # Example interaction features
+        if 'HS' in df.columns and 'AS' in df.columns:
+            df['TotalShots'] = df['HS'] + df['AS']
+            df['ShotsDifference'] = df['HS'] - df['AS']
 
-    def split_features_target(self, df: pd.DataFrame,
-                              target_column: str) -> Tuple[pd.DataFrame, pd.Series]:
+        if 'HF' in df.columns and 'AF' in df.columns:
+            df['TotalFouls'] = df['HF'] + df['AF']
+            df['FoulsDifference'] = df['HF'] - df['AF']
+
+        if 'HC' in df.columns and 'AC' in df.columns:
+            df['TotalCorners'] = df['HC'] + df['AC']
+            df['CornersDifference'] = df['HC'] - df['AC']
+
+        return df
+
+    def engineer_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Split dataframe into features and target
+        Apply all feature engineering steps
 
         Args:
-            df: Complete DataFrame
-            target_column: Name of target column
+            df: DataFrame with raw features
 
         Returns:
-            Tuple of (features, target)
+            DataFrame with engineered features
         """
-        logger.info(
-            f"Splitting features and target (target column: {target_column})")
+        logger.info("Starting feature engineering pipeline")
 
-        # Remove outcome-related columns that would cause data leakage
-        columns_to_drop = [target_column, 'FTHG', 'FTAG']
+        # Apply all feature engineering steps
+        df = self.add_team_strength_features(df)
+        df = self.add_shot_accuracy_features(df)
+        df = self.add_form_features(df)
+        df = self.create_interaction_features(df)
 
-        # Select only numeric columns for features
-        numeric_df = df.select_dtypes(include=[np.number])
-
-        # Drop target and leakage columns
-        X = numeric_df.drop(columns_to_drop, axis=1, errors='ignore')
-        y = df[target_column]
-
-        self.feature_names = X.columns.tolist()
-        logger.info(f"Features shape: {X.shape}")
-
-        return X, y
+        logger.info("Feature engineering complete")
+        return df
